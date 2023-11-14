@@ -221,7 +221,7 @@ describe("nft_program", () => {
       )
       .accounts({
         treeConfig,
-        leafOwner: new anchor.web3.PublicKey("CJYpLiKfnqHbD9xrco5kZ8XhWvbAaUwUPQTiaNyd6nFT"),
+        leafOwner: leafOwner.publicKey,
         merkleTree,
         centralAuthority,
         collectionMint,
@@ -289,6 +289,7 @@ describe("nft_program", () => {
         index,
       )
       .accounts({
+        centralAuthority,
         treeConfig: treeConfigPublicKey,
         leafOwner: leafOwner.publicKey,
         merkleTree,
