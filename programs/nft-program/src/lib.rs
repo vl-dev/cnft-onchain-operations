@@ -15,7 +15,7 @@ use anchor_spl::{
     },
     token::{Mint, mint_to, MintTo, Token, TokenAccount},
 };
-use mpl_bubblegum::instructions::{MintToCollectionV1CpiBuilder, BurnCpiBuilder};
+use mpl_bubblegum::instructions::{BurnCpiBuilder, CreateTreeConfigCpiBuilder, MintToCollectionV1CpiBuilder};
 use mpl_bubblegum::types::{Collection, MetadataArgs, TokenProgramVersion, TokenStandard};
 use mpl_token_metadata;
 use mpl_token_metadata::{
@@ -107,6 +107,31 @@ pub mod cnft_vault {
         Ok(())
     }
 
+    pub fn initialize_tree<'info>(ctx: Context<'_, '_, '_, 'info, MerkleTree<'info>>,
+                                  depth: u8) -> Result<()> {
+        msg!("initializing merkle tree");
+        let bump_seed = [ctx.bumps.central_authority];
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            "central_authority".as_bytes(),
+            &bump_seed.as_ref(),
+        ]];
+
+        CreateTreeConfigCpiBuilder::new(
+            &ctx.accounts.bubblegum_program.to_account_info(),
+        )
+            .tree_config(&ctx.accounts.tree_config.to_account_info())
+            .merkle_tree(&ctx.accounts.merkle_tree.to_account_info())
+            .payer(&ctx.accounts.payer.to_account_info())
+            .tree_creator(&ctx.accounts.central_authority.to_account_info())
+            .log_wrapper(&ctx.accounts.log_wrapper.to_account_info())
+            .compression_program(&ctx.accounts.compression_program.to_account_info())
+            .system_program(&ctx.accounts.system_program.to_account_info())
+            .max_depth(14)
+            .max_buffer_size(64)
+            .invoke_signed(signer_seeds)?;
+        Ok(())
+    }
+
     pub fn mint_cnft<'info>(ctx: Context<'_, '_, '_, 'info, MintCNft<'info>>,
                             name: String,
                             symbol: String,
@@ -176,7 +201,6 @@ pub mod cnft_vault {
             .iter()
             .map(|account| (account, account.is_signer, account.is_writable))
             .collect();
-
 
         BurnCpiBuilder::new(
             &ctx.accounts.bubblegum_program.to_account_info(),
@@ -365,4 +389,30 @@ pub struct InitNFT<'info> {
     pub token_metadata_program: Program<'info, Metadata>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct MerkleTree<'info> {
+    #[account(mut, signer)]
+    pub payer: Signer<'info>,
+
+    #[account(
+    seeds = [b"central_authority"],
+    bump
+    )]
+    pub central_authority: Account<'info, CentralStateData>,
+
+    /// CHECK: This account must be all zeros
+    #[account(signer)]
+    pub merkle_tree: AccountInfo<'info>,
+
+    /// CHECK: This account is checked in the instruction
+    #[account(mut)]
+    pub tree_config: UncheckedAccount<'info>,
+
+    // program
+    pub bubblegum_program: Program<'info, MplBubblegum>,
+    pub system_program: Program<'info, System>,
+    pub log_wrapper: Program<'info, Noop>,
+    pub compression_program: Program<'info, SplAccountCompression>,
 }
