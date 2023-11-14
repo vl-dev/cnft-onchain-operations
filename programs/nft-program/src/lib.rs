@@ -24,12 +24,29 @@ use mpl_token_metadata::{
 
 declare_id!("HcmjtyqZgSeNFdKvHCBCDNEJHSwrf9KveBrbXQKXPxqN");
 
+// The program will support only trees of the following parameters:
+const MAX_TREE_DEPTH: u32 = 14;
+const MAX_TREE_BUFFER_SIZE: u32 = 64;
+// this corresponds to account with a canopy depth 11.
+// If you need the tree parameters to be dynamic, you can use the following function:
+// fn tree_bytes_size() -> usize {
+//     const CONCURRENT_MERKLE_TREE_HEADER_SIZE_V1: usize = 2 + 54;
+//     let merkle_tree_size = size_of::<ConcurrentMerkleTree<14, 64>>();
+//     msg!("merkle tree size: {}", merkle_tree_size);
+//     let canopy_size = ((2 << 9) - 2) * 32;
+//     msg!("canopy size: {}", canopy_size);
+//     CONCURRENT_MERKLE_TREE_HEADER_SIZE_V1 + merkle_tree_size + (canopy_size as usize)
+// }
+const REQUIRED_TREE_ACCOUNT_SIZE: usize = 162_808;
+
+
 #[program]
 pub mod cnft_vault {
     use super::*;
 
+    // initializes the basic contract data and creates a maintained NFT collection
     pub fn initialize(
-        ctx: Context<InitNFT>,
+        ctx: Context<Init>,
         name: String,
         symbol: String,
         uri: String,
@@ -104,12 +121,13 @@ pub mod cnft_vault {
 
         create_master_edition_v3(cpi_context, Some(0))?;
 
+        ctx.accounts.central_authority.collection_address = ctx.accounts.mint.key();
         Ok(())
     }
 
-    pub fn initialize_tree<'info>(ctx: Context<'_, '_, '_, 'info, MerkleTree<'info>>,
-                                  depth: u8) -> Result<()> {
+    pub fn initialize_tree<'info>(ctx: Context<'_, '_, '_, 'info, MerkleTree<'info>>) -> Result<()> {
         msg!("initializing merkle tree");
+        require_eq!(ctx.accounts.merkle_tree.data.borrow().len(), REQUIRED_TREE_ACCOUNT_SIZE, MyError::UnsupportedTreeAccountSize);
         let bump_seed = [ctx.bumps.central_authority];
         let signer_seeds: &[&[&[u8]]] = &[&[
             "central_authority".as_bytes(),
@@ -126,18 +144,24 @@ pub mod cnft_vault {
             .log_wrapper(&ctx.accounts.log_wrapper.to_account_info())
             .compression_program(&ctx.accounts.compression_program.to_account_info())
             .system_program(&ctx.accounts.system_program.to_account_info())
-            .max_depth(14)
-            .max_buffer_size(64)
+            .max_depth(MAX_TREE_DEPTH)
+            .max_buffer_size(MAX_TREE_BUFFER_SIZE)
             .invoke_signed(signer_seeds)?;
+
+        ctx.accounts.central_authority.merkle_tree_address = Some(ctx.accounts.merkle_tree.key());
         Ok(())
     }
 
+    // this instruction is permissionless. In a real-world program you would want to check the caller.
     pub fn mint_cnft<'info>(ctx: Context<'_, '_, '_, 'info, MintCNft<'info>>,
                             name: String,
                             symbol: String,
                             uri: String,
                             seller_fee_basis_points: u16) -> Result<()> {
         msg!("minting nft");
+        require!(ctx.accounts.central_authority.merkle_tree_address.is_some(), MyError::InvalidMerkleTree);
+        require_keys_eq!(*ctx.accounts.merkle_tree.key, ctx.accounts.central_authority.merkle_tree_address.unwrap(), MyError::InvalidMerkleTree);
+        require_keys_eq!(*ctx.accounts.collection_mint.key, ctx.accounts.central_authority.collection_address, MyError::InvalidMerkleTree);
         let bump_seed = [ctx.bumps.central_authority];
         let signer_seeds: &[&[&[u8]]] = &[&[
             "central_authority".as_bytes(),
@@ -151,12 +175,9 @@ pub mod cnft_vault {
             .leaf_delegate(&ctx.accounts.leaf_owner.to_account_info())
             .merkle_tree(&ctx.accounts.merkle_tree.to_account_info())
             .payer(&ctx.accounts.payer.to_account_info())
-            .tree_creator_or_delegate(&ctx.accounts.tree_delegate.to_account_info())
+            .tree_creator_or_delegate(&ctx.accounts.central_authority.to_account_info())
             .collection_authority(&ctx.accounts.central_authority.to_account_info())
-            .collection_authority_record_pda(Some(&ctx
-                .accounts
-                .collection_authority_record_pda
-                .to_account_info()))
+            .collection_authority_record_pda(Some(&ctx.accounts.bubblegum_program.to_account_info()))
             .collection_mint(&ctx.accounts.collection_mint.to_account_info())
             .collection_metadata(&ctx.accounts.collection_metadata.to_account_info())
             .collection_edition(&ctx.accounts.edition_account.to_account_info())
@@ -188,7 +209,6 @@ pub mod cnft_vault {
         Ok(())
     }
 
-
     pub fn burn_cnft<'info>(ctx: Context<'_, '_, '_, 'info, BurnAccs<'info>>,
                             root: [u8; 32],
                             data_hash: [u8; 32],
@@ -196,6 +216,8 @@ pub mod cnft_vault {
                             nonce: u64,
                             index: u32) -> Result<()> {
         msg!("burning nft");
+        require!(ctx.accounts.central_authority.merkle_tree_address.is_some(), MyError::InvalidMerkleTree);
+        require_keys_eq!(*ctx.accounts.merkle_tree.key, ctx.accounts.central_authority.merkle_tree_address.unwrap(), MyError::InvalidMerkleTree);
 
         let remaining_accounts: Vec<(&AccountInfo, bool, bool)> = ctx.remaining_accounts
             .iter()
@@ -227,7 +249,13 @@ pub mod cnft_vault {
 #[error_code]
 pub enum MyError {
     #[msg("No signer")]
-    NoSigner
+    NoSigner,
+    #[msg("Unsupported tree account size")]
+    UnsupportedTreeAccountSize,
+    #[msg("Invalid merkle tree")]
+    InvalidMerkleTree,
+    #[msg("Invalid collection")]
+    InvalidCollection,
 }
 
 #[derive(Clone, AnchorSerialize, AnchorDeserialize)]
@@ -294,11 +322,6 @@ pub struct MintCNft<'info> {
     )]
     pub central_authority: Account<'info, CentralStateData>,
 
-    /// CHECK: Optional collection authority record PDA.
-    /// If there is no collecton authority record PDA then
-    /// this must be the Bubblegum program address.
-    pub collection_authority_record_pda: UncheckedAccount<'info>,
-
     /// CHECK: This account is checked in the instruction
     pub collection_mint: UncheckedAccount<'info>,
 
@@ -320,6 +343,11 @@ pub struct MintCNft<'info> {
 
 #[derive(Accounts)]
 pub struct BurnAccs<'info> {
+    #[account(
+    seeds = [b"central_authority"],
+    bump
+    )]
+    pub central_authority: Account<'info, CentralStateData>,
     /// CHECK: This account is checked in the instruction
     #[account(mut)]
     pub leaf_owner: Signer<'info>,
@@ -336,20 +364,22 @@ pub struct BurnAccs<'info> {
 }
 
 #[account]
-pub struct CentralStateData {}
+pub struct CentralStateData {
+    pub collection_address: Pubkey,
+    pub merkle_tree_address: Option<Pubkey>,
+}
 
 impl CentralStateData {
     pub const MAX_SIZE: usize = 32 * 3;
 }
 
 #[derive(Accounts)]
-pub struct InitNFT<'info> {
+pub struct Init<'info> {
     /// CHECK: ok, we are passing in this account ourselves
     #[account(mut, signer)]
     pub signer: AccountInfo<'info>,
-    // here you might need only init, not init_if_needed
     #[account(
-    init_if_needed,
+    init,
     payer = signer,
     space = 8 + CentralStateData::MAX_SIZE,
     seeds = [b"central_authority"],
@@ -398,12 +428,16 @@ pub struct MerkleTree<'info> {
 
     #[account(
     seeds = [b"central_authority"],
-    bump
+    bump,
+    mut
     )]
     pub central_authority: Account<'info, CentralStateData>,
 
     /// CHECK: This account must be all zeros
-    #[account(signer)]
+    #[account(
+    zero,
+    signer
+    )]
     pub merkle_tree: AccountInfo<'info>,
 
     /// CHECK: This account is checked in the instruction

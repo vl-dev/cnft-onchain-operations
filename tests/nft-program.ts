@@ -47,7 +47,6 @@ describe("nft_program", () => {
   const masterEditionAddress = new anchor.web3.PublicKey('<your collection edition account>')
   const leafOwner = Keypair.fromSecretKey('<recipient of the cNFT>');
   const merkleTree = new anchor.web3.PublicKey('<merkle tree account>');
-  const treeConfig = new anchor.web3.PublicKey('<tree config account>');
   // this needs to be filled for the burn test to work, you can get the asset id of the cNFT you want to burn by running the mint test first and noting it down
   const assetId = '<address of the cNFT you want to burn>'
 
@@ -94,6 +93,7 @@ describe("nft_program", () => {
   // console.log("Master edition:", masterEditionAddress.toBase58());
 
   it("Should initialize a merkle tree", async () => {
+    return;
     const emptyMerkleTree = anchor.web3.Keypair.generate();
     console.log(`Merke tree: ${emptyMerkleTree.publicKey.toBase58()}`);
     const umi = createUmi(provider.connection.rpcEndpoint);
@@ -117,9 +117,7 @@ describe("nft_program", () => {
       11,
     );
 
-    const ix = await program.methods.initializeTree(
-        0
-      )
+    const ix = await program.methods.initializeTree()
       .accounts(
         {
           payer: authorityWallet.publicKey,
@@ -205,7 +203,6 @@ describe("nft_program", () => {
   })
 
   it("Mints a cnft to an existing tree and collection", async () => {
-    return;
     // return;
     const umi = createUmi(provider.connection.rpcEndpoint);
     const treeConfig = findTreeConfigPda(
@@ -224,11 +221,9 @@ describe("nft_program", () => {
       )
       .accounts({
         treeConfig,
-        leafOwner: leafOwner.publicKey,
+        leafOwner: new anchor.web3.PublicKey("CJYpLiKfnqHbD9xrco5kZ8XhWvbAaUwUPQTiaNyd6nFT"),
         merkleTree,
-        treeDelegate: authorityWallet.publicKey,
         centralAuthority,
-        collectionAuthorityRecordPda: MPL_BUBBLEGUM_PROGRAM_ID,
         collectionMint,
         collectionMetadata: metadataAddress,
         editionAccount: masterEditionAddress,
@@ -239,8 +234,10 @@ describe("nft_program", () => {
         bubblegumProgram: MPL_BUBBLEGUM_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
-      .signers([authorityWallet])
-      .rpc()
+      .signers([])
+      .rpc({
+        skipPreflight: true,
+      })
     console.log(tx)
   })
 
